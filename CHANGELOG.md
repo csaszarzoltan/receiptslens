@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-20
+
+### Features
+
+- Add non-blocking async image fetch with `app/ssrf_guard.py` — SSRF-safe URL validation with egress allowlist, redirect handling, and configurable `MAX_IMAGE_BYTES` / `URL_FETCH_TIMEOUT` limits.
+- Add duplicate receipt detection endpoint `POST /v1/check-duplicates` with vendor similarity scoring and canonical total comparison.
+- Add `POST /v1/parse-receipt/image-url` endpoint for parsing receipts from remote URLs with SSRF protection.
+- Configurable resource limits: `MAX_IMAGE_BYTES` and `URL_FETCH_TIMEOUT` constants replace hardcoded values.
+
+### Tests
+
+- 211 tests passing (up from 29 in v0.2.0). Full regression suite covers SSRF guard, async fetch, image URL endpoint, duplicate detection, configurable limits, and security egress allowlist.
+
 ## [0.3.0] - 2026-07-20
 
 ### Features
