@@ -1,8 +1,4 @@
-from fastapi import FastAPI
+"""Application entry-point."""
+from app.api import app
 
-app = FastAPI(title="ReceiptLens", version="0.0.1")
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+__all__ = ["app"]

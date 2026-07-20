@@ -2,10 +2,10 @@
 name = "receiptslens"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.110","uvicorn>=0.29","pydantic>=2.6","pillow>=10.3","pytesseract>=0.3","requests>=2.31","python-multipart>=0.0.9"]
+dependencies = ["fastapi>=0.110","uvicorn>=0.29","pydantic>=2.6","pillow>=10.3","pytesseract>=0.3","httpx>=0.27","python-multipart>=0.0.9"]
 
 [project.optional-dev]
-dependencies = ["pytest>=8.2","httpx>=0.27","ruff>=0.4"]
+dependencies = ["pytest>=8.2","ruff>=0.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

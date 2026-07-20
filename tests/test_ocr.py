@@ -1,21 +1,11 @@
-"""Pre-development interface + behavioral tests for the ReceiptLens OCR pipeline.
+"""Pre-development interface + behavioral tests for the ReceiptLens OCR pipeline."""
+from __future__ import annotations
 
-Contract under test (app/ocr.py):
-  - extract_text(image_bytes: bytes) -> str
-  - parse_receipt(image_bytes: bytes) -> ParsedReceipt
-
-Interface tests PASS immediately (they only inspect signatures / type hints).
-Behavioral tests are marked xfail(strict=True, raises=NotImplementedError):
-they encode the INTENDED behavior (returning a str / ParsedReceipt) and so
-they FAIL now because the stub raises NotImplementedError -- the expected
-pre-dev failure. pytest still exits 0 (xfail, not a hard failure). Once a
-real implementation lands, these tests will XPASS and strict=True will turn
-that into a failure, forcing the developer to drop the xfail marker.
-"""
 import inspect
 from typing import get_type_hints
 
 import pytest
+from PIL import Image
 
 from app import ocr
 
@@ -30,22 +20,26 @@ def test_ocr_importable():
 
 
 def test_extract_text_signature():
-    sig = inspect.signature(ocr.extract_text)
+    func = ocr.extract_text
+    sig = inspect.signature(func)
     params = list(sig.parameters)
     assert params == ["image_bytes"], f"extract_text params changed: {params}"
-    assert sig.parameters["image_bytes"].annotation is bytes
+    hints = get_type_hints(func)
+    assert hints.get("image_bytes") is bytes
 
 
 def test_extract_text_return_type_hint():
     hints = get_type_hints(ocr.extract_text)
-    assert hints.get("return") is str, "extract_text must be annotated -> str"
+    assert hints.get("return") is str, f"extract_text return hint is {hints.get('return')}"
 
 
 def test_parse_receipt_signature():
-    sig = inspect.signature(ocr.parse_receipt)
+    func = ocr.parse_receipt
+    sig = inspect.signature(func)
     params = list(sig.parameters)
     assert params == ["image_bytes"], f"parse_receipt params changed: {params}"
-    assert sig.parameters["image_bytes"].annotation is bytes
+    hints = get_type_hints(func)
+    assert hints.get("image_bytes") is bytes
 
 
 def test_parse_receipt_return_type_hint():
@@ -59,15 +53,28 @@ def test_dataclasses_defined():
 
 
 # --------------------------------------------------------------------------
-# Behavioral tests -- expected failures (NotImplementedError) until implemented
+# Behavioral tests -- real OCR behavior
 # --------------------------------------------------------------------------
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="OCR pipeline not implemented yet")
-def test_extract_text_returns_str():
-    result = ocr.extract_text(SAMPLE_BYTES)
+def test_extract_text_returns_str_for_valid_image():
+    image = Image.new("RGB", (200, 100), color="white")
+    buf = __import__("io").BytesIO()
+    image.save(buf, format="PNG")
+    buf.seek(0)
+    result = ocr.extract_text(buf.getvalue())
     assert isinstance(result, str)
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="OCR pipeline not implemented yet")
-def test_parse_receipt_returns_parsed():
-    result = ocr.parse_receipt(SAMPLE_BYTES)
+def test_parse_receipt_returns_parsed_for_valid_image():
+    image = Image.new("RGB", (200, 100), color="white")
+    buf = __import__("io").BytesIO()
+    image.save(buf, format="PNG")
+    buf.seek(0)
+    result = ocr.parse_receipt(buf.getvalue())
     assert isinstance(result, ocr.ParsedReceipt)
+    assert isinstance(result.items, list)
+    assert isinstance(result.raw_text, str)
+
+
+def test_parse_receipt_rejects_empty_bytes():
+    with pytest.raises(ValueError, match="image_bytes must not be empty"):
+        ocr.parse_receipt(b"")

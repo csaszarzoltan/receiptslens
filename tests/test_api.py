@@ -1,18 +1,6 @@
-"""Pre-development interface + behavioral tests for the ReceiptLens API.
+"""Pre-development interface + behavioral tests for the ReceiptLens API."""
+from __future__ import annotations
 
-Contract under test (app/api.py):
-  - app: FastAPI instance
-  - parse_receipt_endpoint(file: bytes) -> dict   (async)
-  - POST /v1/parse-receipt
-
-Interface tests PASS immediately (import + signature / route inspection).
-The behavioral test is marked xfail(strict=True, raises=NotImplementedError):
-it encodes the INTENDED behavior (returning a dict) and so it FAILS now
-because the stub raises NotImplementedError -- the expected pre-dev failure.
-pytest still exits 0 (xfail, not a hard failure). Once the endpoint is wired
-to the OCR pipeline, the test will XPASS and strict=True will turn that into a
-failure, forcing the developer to drop the xfail marker.
-"""
 import asyncio
 import inspect
 from typing import get_type_hints
@@ -41,10 +29,12 @@ def test_parse_receipt_route_registered():
 
 def test_parse_receipt_endpoint_signature():
     func = api.parse_receipt_endpoint
-    sig = inspect.signature(func)
-    assert sig.return_annotation is dict
+    # ``from __future__ import annotations`` stores annotations as strings.
+    # Convert them back so we can check the runtime shape.
     hints = get_type_hints(func)
+    assert hints.get("return") is dict, f"return annotation is {hints.get('return')}"
     assert "file" in hints
+    assert hints["file"] is bytes
 
 
 def test_parse_receipt_endpoint_is_async():
@@ -52,8 +42,25 @@ def test_parse_receipt_endpoint_is_async():
 
 
 # --------------------------------------------------------------------------
-# Behavioral test -- expected failure (NotImplementedError) until implemented
+# Behavioral tests -- actual endpoint behavior
 # --------------------------------------------------------------------------
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="parse-receipt endpoint not implemented yet")
-def test_parse_receipt_endpoint_not_implemented():
-    asyncio.run(api.parse_receipt_endpoint(file=b""))
+def test_parse_receipt_rejects_empty_payload():
+    with pytest.raises(Exception):  # HTTPException raised inside async func
+        asyncio.run(api.parse_receipt_endpoint(file=b""))
+
+
+def test_parse_receipt_accepts_valid_image_bytes():
+    """With a real image, the endpoint returns the expected schema."""
+    from PIL import Image
+
+    image = Image.new("RGB", (200, 100), color="white")
+    buf = __import__("io").BytesIO()
+    image.save(buf, format="PNG")
+    buf.seek(0)
+    image_bytes = buf.read()
+
+    result = asyncio.run(api.parse_receipt_endpoint(file=image_bytes))
+    assert isinstance(result, dict)
+    for key in ("vendor", "total", "date", "tax", "currency", "line_items"):
+        assert key in result, f"missing key {key!r} in {result}"
+    assert isinstance(result["line_items"], list)
