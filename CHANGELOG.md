@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-20
+
+### Features
+
+- Add batch receipt processing endpoints:
+  - `POST /v1/parse-receipts` for synchronous batch parsing from multipart `files[]` uploads or JSON `image_urls`.
+  - `POST /v1/parse-receipts/async` for asynchronous batch jobs with optional `webhook_url` delivery.
+- Batch results preserve input order via `index`, return per-item errors without failing the whole request, and include `summary.total`, `summary.successful`, and `summary.failed`.
+- Input validation now rejects mixed `files[]` and `image_urls` with `400`, empty requests with `422`, and more than 20 inputs with `413`.
+
+### Tests
+
+- Added `tests/test_batch_processing.py` covering batch route registration, mixed-input rejection, payload-size limits, empty-image behavior, URL fetch error handling, and summary count correctness.
+- Full regression suite still passes against existing single-receipt endpoints and async confidence workflows.
+
 ## [0.2.0] - 2026-07-20
 
 ### Features

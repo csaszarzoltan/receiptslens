@@ -108,6 +108,91 @@ Response:
 }
 ```
 
+### `POST /v1/parse-receipts`
+
+Parse multiple receipt images in a single request. Accepts either multiple
+`files` uploads or a JSON `image_urls` array, not both.
+
+#### Request (file uploads)
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipts" \
+  -F "files=@/path/to/receipt1.jpg" \
+  -F "files=@/path/to/receipt2.jpg"
+```
+
+#### Request (URLs)
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipts" \
+  -F 'image_urls=["https://example.com/receipt1.jpg","https://example.com/receipt2.jpg"]'
+```
+
+#### Response
+
+```json
+{
+  "results": [
+    {
+      "index": 0,
+      "vendor": "STORE A",
+      "total": 12.50,
+      "date": "2025-03-14",
+      "tax": 1.00,
+      "currency": "USD",
+      "line_items": [
+        { "name": "ITEM", "price": 9.99 }
+      ],
+      "confidence": {
+        "vendor": 0.88,
+        "total": 0.95,
+        "date": 0.80,
+        "tax": 0.70,
+        "currency": 0.99,
+        "line_items": 0.85
+      },
+      "error": null
+    },
+    {
+      "index": 1,
+      "vendor": null,
+      "total": null,
+      "date": null,
+      "tax": null,
+      "currency": null,
+      "line_items": [],
+      "confidence": {
+        "vendor": null,
+        "total": null,
+        "date": null,
+        "tax": null,
+        "currency": null,
+        "line_items": null
+      },
+      "error": "Failed to fetch image from URL: ..."
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "successful": 1,
+    "failed": 1
+  }
+}
+```
+
+### `POST /v1/parse-receipts/async`
+
+Queue an async batch OCR job. Same inputs as `POST /v1/parse-receipts`,
+plus optional `webhook_url` for completion callback.
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipts/async" \
+  -F "files=@/path/to/receipt1.jpg" \
+  -F "files=@/path/to/receipt2.jpg"
+```
+
+Returns `job_id` immediately. Poll with `GET /v1/jobs/{job_id}`.
+
 ## Verified quickstart
 
 ```bash

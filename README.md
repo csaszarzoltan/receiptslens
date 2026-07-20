@@ -6,7 +6,7 @@
 
 **ReceiptLens** extracts structured data from receipt images using Tesseract OCR.
 
-Send an image (file upload or public URL) to `POST /v1/parse-receipt` and get back JSON with `vendor`, `total`, `date`, `tax`, `currency`, and `line_items[]`.
+Send an image (file upload, public URL, or batch of either) to `POST /v1/parse-receipt` or `POST /v1/parse-receipts` and get back JSON with `vendor`, `total`, `date`, `tax`, `currency`, and `line_items[]`.
 
 ---
 
@@ -16,9 +16,10 @@ Send an image (file upload or public URL) to `POST /v1/parse-receipt` and get ba
 - **Structured output** — parses merchant, date, line items, subtotal, tax, and total from raw OCR text with regex heuristics.
 - **Confidence scores** — every field includes a `confidence` float between 0.0 and 1.0, derived from Tesseract `image_to_data` accuracy metrics.
 - **Async processing** — queue long-running OCR jobs with `POST /v1/parse-receipt/async`, poll with `GET /v1/jobs/{job_id}`, and receive a webhook callback on completion.
-- **Flexible input** — accepts a multipart `file` upload or an `image_url` form field.
+- **Batch processing** — parse multiple receipts in one call with `POST /v1/parse-receipts` for file uploads or `image_urls`, plus async batch jobs via `POST /v1/parse-receipts/async`.
+- **Flexible input** — accepts a multipart `file` upload or an `image_url` form field, in single or batch mode.
 - **FastAPI service** — async endpoint with `/health`, OpenAPI docs, and strict type hints.
-- **Tested** — 29 pytest tests, ruff linted, type-checked dataclasses.
+- **Tested** — pytest suite plus `ruff` linting.
 
 ---
 
@@ -60,11 +61,33 @@ curl -X POST "http://localhost:8000/v1/parse-receipt" \
   -F "image_url=https://example.com/receipt.jpg"
 ```
 
+### Batch parsing
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipts" \
+  -F "files=@/path/to/receipt1.jpg" \
+  -F "files=@/path/to/receipt2.jpg"
+```
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipts" \
+  -F "image_urls=[\"https://example.com/receipt1.jpg\",\"https://example.com/receipt2.jpg\"]"
+```
+
 ### Async parsing
 
 ```bash
 curl -X POST "http://localhost:8000/v1/parse-receipt/async" \
   -F "file=@/path/to/receipt.jpg"
+  # returns { "job_id": "uuid", "status": "queued" }
+```
+
+### Async batch parsing
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipts/async" \
+  -F "files=@/path/to/receipt1.jpg" \
+  -F "files=@/path/to/receipt2.jpg"
   # returns { "job_id": "uuid", "status": "queued" }
 ```
 
@@ -106,6 +129,8 @@ curl -X POST "http://localhost:8000/v1/parse-receipt/async" \
   }
 }
 ```
+
+Batch responses wrap individual results in a top-level `results` array with a `summary` block.
 
 ## Tests
 
