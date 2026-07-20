@@ -19,7 +19,7 @@ curl http://localhost:8000/health
 
 ### `POST /v1/parse-receipt`
 
-Parse a receipt image and return structured JSON.
+Parse a receipt image and return structured JSON with per-field confidence scores.
 
 Send either:
 - `file` (multipart upload), or
@@ -52,7 +52,59 @@ curl -X POST "http://localhost:8000/v1/parse-receipt" \
   "currency": "USD",
   "line_items": [
     { "name": "ITEM", "price": 9.99 }
-  ]
+  ],
+  "confidence": {
+    "vendor": 0.88,
+    "total": 0.95,
+    "date": 0.80,
+    "tax": 0.70,
+    "currency": 0.99,
+    "line_items": 0.85
+  }
+}
+```
+
+### `POST /v1/parse-receipt/async`
+
+Queue an async OCR job and return immediately with a `job_id`.
+
+Parameters:
+
+- `file` (multipart upload)
+- `image_url` (form field)
+- `webhook_url` (optional form field) — URL to POST the result to when processing completes or fails.
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipt/async" \
+  -F "file=@/path/to/receipt.jpg"
+```
+
+Response:
+
+```json
+{
+  "job_id": "uuid",
+  "status": "queued",
+  "webhook_url": null
+}
+```
+
+### `GET /v1/jobs/{job_id}`
+
+Poll the status and result of an async OCR job.
+
+```bash
+curl "http://localhost:8000/v1/jobs/abc123"
+```
+
+Response:
+
+```json
+{
+  "job_id": "abc123",
+  "status": "completed",
+  "result": { ... same shape as /v1/parse-receipt ... },
+  "error": null
 }
 ```
 

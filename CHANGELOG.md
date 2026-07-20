@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-20
+
+### Features
+
+- Add per-field confidence scores to receipt parsing responses. Each field
+  (`vendor`, `total`, `date`, `tax`, `currency`, `line_items`) now includes
+  a `confidence` float between 0.0 and 1.0 derived from Tesseract
+  `image_to_data` accuracy metrics.
+- Add `POST /v1/parse-receipt/async` for non-blocking OCR jobs. Accepts
+  optional `webhook_url` to receive a JSON POST on completion or failure.
+- Add `GET /v1/jobs/{job_id}` for polling async job status and results.
+- Run blocking OCR calls inside a ThreadPoolExecutor to keep the FastAPI
+  event loop responsive.
+
+### Tests
+
+- Added `tests/test_async_confidence.py` with 10 interface and behavioral
+  tests covering async scheduling, confidence schema, webhook delivery, and
+  job polling. Full suite is 29 tests passing.
+
 ## [0.1.1] - 2026-07-20
 
 ### Fixed

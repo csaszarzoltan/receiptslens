@@ -14,9 +14,11 @@ Send an image (file upload or public URL) to `POST /v1/parse-receipt` and get ba
 
 - **Receipt OCR** — runs Tesseract 5 on uploaded images with automatic pre-processing (grayscale, upscale, contrast, sharpen).
 - **Structured output** — parses merchant, date, line items, subtotal, tax, and total from raw OCR text with regex heuristics.
+- **Confidence scores** — every field includes a `confidence` float between 0.0 and 1.0, derived from Tesseract `image_to_data` accuracy metrics.
+- **Async processing** — queue long-running OCR jobs with `POST /v1/parse-receipt/async`, poll with `GET /v1/jobs/{job_id}`, and receive a webhook callback on completion.
 - **Flexible input** — accepts a multipart `file` upload or an `image_url` form field.
 - **FastAPI service** — async endpoint with `/health`, OpenAPI docs, and strict type hints.
-- **Tested** — 16 pytest tests, ruff linted, type-checked dataclasses.
+- **Tested** — 29 pytest tests, ruff linted, type-checked dataclasses.
 
 ---
 
@@ -42,18 +44,42 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Visit `http://localhost:8000/docs` for the interactive OpenAPI playground.
 
-### Extract from a file
+---
+
+## Endpoints
+
+### Sync parsing
 
 ```bash
 curl -X POST "http://localhost:8000/v1/parse-receipt" \
   -F "file=@/path/to/receipt.jpg"
 ```
 
-### Extract from a URL
-
 ```bash
 curl -X POST "http://localhost:8000/v1/parse-receipt" \
   -F "image_url=https://example.com/receipt.jpg"
+```
+
+### Async parsing
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipt/async" \
+  -F "file=@/path/to/receipt.jpg"
+  # returns { "job_id": "uuid", "status": "queued" }
+```
+
+Poll for the result:
+
+```bash
+curl "http://localhost:8000/v1/jobs/{job_id}"
+```
+
+Optional webhook:
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipt/async" \
+  -F "file=@/path/to/receipt.jpg" \
+  -F "webhook_url=https://your-app.com/ocr-callback"
 ```
 
 ---
@@ -69,7 +95,15 @@ curl -X POST "http://localhost:8000/v1/parse-receipt" \
   "currency": "USD",           // ISO-4217 currency code
   "line_items": [              // parsed individual items
     { "name": "ITEM", "price": 9.99 }
-  ]
+  ],
+  "confidence": {              // per-field confidence (0.0 - 1.0)
+    "vendor": 0.88,
+    "total": 0.95,
+    "date": 0.80,
+    "tax": 0.70,
+    "currency": 0.99,
+    "line_items": 0.85
+  }
 }
 ```
 
