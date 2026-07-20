@@ -10,21 +10,28 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, field_validator
 
-from app.ocr import ConfidenceReceipt, parse_receipt_with_confidence
-
+from app.ocr import ConfidenceReceipt, check_duplicates, parse_receipt_with_confidence
+from app.security import fetch_image_bytes
+from app.ssrf_guard import validate_scheme_and_host
 logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
     title="ReceiptLens",
     description="Extract structured data from receipt images.",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+# ---------------------------------------------------------------------------
+# Configurable limits (plumbed into fetch_image_bytes defaults)
+# ---------------------------------------------------------------------------
+MAX_IMAGE_BYTES: int = 20_000_000  # 20 MB
+URL_FETCH_TIMEOUT: float = 30.0  # seconds
 
 
 # ---------------------------------------------------------------------------
@@ -77,19 +84,6 @@ def _bytes_from_upload(upload: UploadFile) -> bytes:
     return upload.file.read()
 
 
-def _bytes_from_url(url: str) -> bytes:
-    try:
-        with httpx.Client(timeout=httpx.Timeout(connect=10.0, read=30.0, write=None, pool=None)) as client:
-            resp = client.get(url, follow_redirects=True)
-            resp.raise_for_status()
-            return resp.content
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to fetch image from URL: {exc}",
-        ) from exc
-
-
 def _render_receipt(parsed: ConfidenceReceipt) -> dict:
     return {
         "vendor": parsed.merchant,
@@ -109,11 +103,25 @@ def _process_one(item_bytes: bytes) -> dict[str, Any]:
     return _render_receipt(parsed)
 
 
-async def _process_job(image_bytes: bytes, job_id: str, webhook_url: str | None = None) -> None:
-    """Run OCR in a thread and update job store."""
+async def _process_job(
+    image_bytes: bytes | None,
+    job_id: str,
+    webhook_url: str | None = None,
+    image_url: str | None = None,
+) -> None:
+    """Run OCR in a thread and update job store.
+
+    If *image_url* is provided, the fetch happens here (background) instead
+    of in the request handler, keeping the ``/v1/parse-receipt/async``
+    response non-blocking (P1-2).
+    """
     _job_store.set_status(job_id, "processing")
 
     def _run() -> dict:
+        if image_url is not None:
+            image_bytes_url = fetch_image_bytes(image_url)
+            return _process_one(image_bytes_url)
+        assert image_bytes is not None, "image_bytes required when image_url is not set"
         return _process_one(image_bytes)
 
     loop = __import__("asyncio").get_running_loop()
@@ -126,20 +134,48 @@ async def _process_job(image_bytes: bytes, job_id: str, webhook_url: str | None 
                 "status": "completed",
                 "result": result,
             })
-    except Exception as exc:
-        logger.exception("Async OCR job %s failed", job_id)
-        _job_store.set_status(job_id, "failed", error=str(exc))
+    except HTTPException as exc:
+        # Forward upstream fetch errors (e.g. bad URL) to job status
+        _job_store.set_status(job_id, "failed", error=str(exc.detail))
         if webhook_url:
             await _deliver_webhook(webhook_url, {
                 "job_id": job_id,
                 "status": "failed",
-                "error": str(exc),
+                "error": str(exc.detail),
+            })
+    except Exception:
+        logger.exception("Async OCR job %s failed", job_id)
+        _job_store.set_status(job_id, "failed", error="OCR processing failed.")
+        if webhook_url:
+            await _deliver_webhook(webhook_url, {
+                "job_id": job_id,
+                "status": "failed",
+                "error": "OCR processing failed.",
             })
 
 
-async def _process_batch_job(items: list[dict[str, Any]], job_id: str, webhook_url: str | None = None) -> None:
-    """Run batch OCR in threads and update job store with per-item status."""
+async def _process_batch_job(
+    items: list[dict[str, Any]],
+    job_id: str,
+    webhook_url: str | None = None,
+    image_urls: list[str] | None = None,
+) -> None:
+    """Run batch OCR in threads and update job store with per-item status.
+
+    If *image_urls* is provided, each URL is fetched inside the background
+    job (P1-2 non-blocking contract) rather than in the request handler.
+    """
     _job_store.set_status(job_id, "processing")
+
+    # When image_urls are provided, resolve them to items with bytes (or errors)
+    if image_urls is not None:
+        items = []
+        for idx, url in enumerate(image_urls):
+            try:
+                items.append(_build_batch_item(idx, fetch_image_bytes(url)))
+            except HTTPException as exc:
+                items.append(_build_error_item(idx, exc.detail))
+
     total = len(items)
     results: list[dict[str, Any]] = []
 
@@ -177,7 +213,7 @@ async def _process_batch_job(items: list[dict[str, Any]], job_id: str, webhook_u
 
             try:
                 rendered = await loop.run_in_executor(_job_store._executor, _run)
-            except Exception as exc:
+            except Exception:
                 rendered = None
                 results.append({
                     "index": item["index"],
@@ -195,7 +231,7 @@ async def _process_batch_job(items: list[dict[str, Any]], job_id: str, webhook_u
                         "currency": None,
                         "line_items": None,
                     },
-                    "error": str(exc),
+                    "error": "OCR processing failed.",
                 })
                 continue
 
@@ -220,18 +256,24 @@ async def _process_batch_job(items: list[dict[str, Any]], job_id: str, webhook_u
                 "status": "completed",
                 "result": final_payload,
             })
-    except Exception as exc:
+    except Exception:
         logger.exception("Async batch OCR job %s failed", job_id)
-        _job_store.set_status(job_id, "failed", error=str(exc))
+        _job_store.set_status(job_id, "failed", error="OCR processing failed.")
         if webhook_url:
             await _deliver_webhook(webhook_url, {
                 "job_id": job_id,
                 "status": "failed",
-                "error": str(exc),
+                "error": "OCR processing failed.",
             })
 
 
 async def _deliver_webhook(url: str, payload: dict) -> None:
+    """POST payload to a webhook URL after SSRF validation."""
+    try:
+        validate_scheme_and_host(url)
+    except ValueError as exc:
+        logger.warning("Webhook URL blocked by SSRF guard: %s", exc)
+        return
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=10.0, write=None, pool=None)) as client:
             resp = await client.post(url, json=payload)
@@ -276,17 +318,23 @@ async def parse_receipt_route(
     if file is not None:
         image_bytes = _bytes_from_upload(file)
     else:
-        image_bytes = _bytes_from_url(image_url)  # type: ignore[arg-type]
+        image_bytes = fetch_image_bytes(image_url)  # type: ignore[arg-type]
 
     try:
         return await parse_receipt_endpoint(image_bytes)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - OCR is unpredictable
+        from PIL import UnidentifiedImageError
+        if isinstance(exc, UnidentifiedImageError):
+            raise HTTPException(
+                status_code=400,
+                detail="The provided data is not a recognized image format.",
+            ) from exc
         logger.exception("OCR processing failed")
         raise HTTPException(
             status_code=500,
-            detail=f"OCR processing failed: {exc}",
+            detail="OCR processing failed.",
         ) from exc
 
 
@@ -314,14 +362,26 @@ async def parse_receipt_async_route(
 
     if file is not None:
         image_bytes = _bytes_from_upload(file)
+        job = _job_store.create(webhook_url=webhook_url)
+        # Fire-and-forget background task — file bytes are ready
+        import asyncio
+
+        asyncio.get_running_loop().create_task(
+            _process_job(image_bytes, job["job_id"], webhook_url=webhook_url)
+        )
     else:
-        image_bytes = _bytes_from_url(image_url)  # type: ignore[arg-type]
+        # Defer the URL fetch to the background job (P1-2 non-blocking)
+        job = _job_store.create(webhook_url=webhook_url)
+        import asyncio
 
-    job = _job_store.create(webhook_url=webhook_url)
-    # Fire-and-forget background task
-    import asyncio
-
-    asyncio.get_running_loop().create_task(_process_job(image_bytes, job["job_id"], webhook_url=webhook_url))
+        asyncio.get_running_loop().create_task(
+            _process_job(
+                None,
+                job["job_id"],
+                webhook_url=webhook_url,
+                image_url=image_url,
+            )
+        )
     return {"job_id": job["job_id"], "status": "queued", "webhook_url": webhook_url}
 
 
@@ -404,7 +464,7 @@ async def parse_receipts_route(
             )
         for idx, url in enumerate(urls):
             try:
-                items.append(_build_batch_item(idx, _bytes_from_url(str(url))))
+                items.append(_build_batch_item(idx, fetch_image_bytes(str(url))))
             except HTTPException as exc:
                 items.append(_build_error_item(idx, exc.detail))
     else:
@@ -442,7 +502,7 @@ async def parse_receipts_route(
 
         try:
             rendered = await loop.run_in_executor(_job_store._executor, _run)
-        except Exception as exc:
+        except Exception:
             results.append({
                 "index": item["index"],
                 "vendor": None,
@@ -459,7 +519,7 @@ async def parse_receipts_route(
                     "currency": None,
                     "line_items": None,
                 },
-                "error": str(exc),
+                "error": "OCR processing failed.",
             })
             continue
 
@@ -522,11 +582,19 @@ async def parse_receipts_async_route(
                 status_code=413,
                 detail="Too many URLs: maximum 20 per request.",
             )
-        for idx, url in enumerate(urls):
-            try:
-                items.append(_build_batch_item(idx, _bytes_from_url(str(url))))
-            except HTTPException as exc:
-                items.append(_build_error_item(idx, exc.detail))
+        # Defer URL fetching to the background job (P1-2 non-blocking)
+        job = _job_store.create(webhook_url=webhook_url)
+        import asyncio
+
+        asyncio.get_running_loop().create_task(
+            _process_batch_job(
+                [],
+                job["job_id"],
+                webhook_url=webhook_url,
+                image_urls=[str(u) for u in urls],
+            )
+        )
+        return {"job_id": job["job_id"], "status": "queued", "webhook_url": webhook_url}
     else:
         raise HTTPException(
             status_code=422,
@@ -540,3 +608,65 @@ async def parse_receipts_async_route(
         _process_batch_job(items, job["job_id"], webhook_url=webhook_url)
     )
     return {"job_id": job["job_id"], "status": "queued", "webhook_url": webhook_url}
+
+
+# ---------------------------------------------------------------------------
+# Duplicate detection endpoint
+# ---------------------------------------------------------------------------
+
+
+class DuplicateCheckRequest(BaseModel):
+    receipts: list[dict]
+
+    @field_validator("receipts")
+    @classmethod
+    def validate_receipts(cls, v: list[dict]) -> list[dict]:
+        if not isinstance(v, list):
+            raise ValueError("receipts must be a list")
+        if len(v) == 0:
+            raise ValueError("receipts list must not be empty")
+        if len(v) > 200:
+            raise HTTPException(
+                status_code=413,
+                detail="Too many receipts: maximum 200 per request.",
+            )
+        for i, receipt in enumerate(v):
+            if not isinstance(receipt, dict):
+                raise ValueError(f"receipt at index {i} must be a dict")
+            total = receipt.get("total")
+            if total is None:
+                raise ValueError(
+                    f"receipt at index {i} is missing required 'total' field"
+                )
+            if not isinstance(total, (int, float)):
+                raise ValueError(
+                    f"receipt at index {i} has non-numeric 'total': {total!r}"
+                )
+        return v
+
+
+@app.post("/v1/check-duplicates", response_model=dict)
+async def check_duplicates_route(body: DuplicateCheckRequest) -> dict:
+    """Check a batch of parsed receipts for potential duplicates."""
+    try:
+        result = check_duplicates(body.receipts)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Duplicate detection failed")
+        raise HTTPException(
+            status_code=500, detail="Duplicate detection failed."
+        ) from exc
+
+    return {
+        "duplicate_groups": [
+            {
+                "group_id": g.group_id,
+                "indices": g.indices,
+                "confidence": g.confidence,
+                "match_evidence": g.match_evidence,
+            }
+            for g in result.duplicate_groups
+        ],
+        "summary": result.summary,
+    }

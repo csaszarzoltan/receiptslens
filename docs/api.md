@@ -41,6 +41,103 @@ curl -X POST "http://localhost:8000/v1/parse-receipt" \
   -F "image_url=https://example.com/receipt.jpg"
 ```
 
+##### URL fetching contract
+
+When `image_url` is provided the server fetches the image server-side before
+running OCR. The fetch is governed by the constraints below.
+
+**Accepted schemes**
+
+Only `http` and `https`. Any other scheme (e.g. `file://`, `ftp://`) is
+rejected immediately with a `400` before any network call.
+
+**SSRF protection**
+
+The fetcher validates the URL and its resolved IP address to prevent
+server-side request forgery.
+
+| Layer | What is checked | Rejection detail |
+|---|---|---|
+| Scheme | Must be `http` or `https` | `400 — Failed to fetch image from URL.` |
+| Hostname blocklist (exact) | `localhost`, `local.host`, `metadata.google.internal`, `metadata.internal`, `169.254.169.254`, `metadata` | `400 — Failed to fetch image from URL.` |
+| Hostname blocklist (substring) | Hostnames containing `local`, `internal`, or `localhost` (case-insensitive, including subdomains such as `foo.local`) | `400 — Failed to fetch image from URL.` |
+| Resolved IPs — private | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | `400 — Failed to fetch image from URL.` |
+| Resolved IPs — loopback | `127.0.0.0/8`, `::1/128` | `400 — Failed to fetch image from URL.` |
+| Resolved IPs — link-local | `169.254.0.0/16`, `fe80::/10` | `400 — Failed to fetch image from URL.` |
+| Resolved IPs — carrier-grade NAT | `100.64.0.0/10` | `400 — Failed to fetch image from URL.` |
+| Resolved IPs — multicast/reserved | `224.0.0.0/4`, `240.0.0.0/4`, `0.0.0.0/8`, `::/128`, `fc00::/7` | `400 — Failed to fetch image from URL.` |
+
+DNS resolution happens **before** any HTTP request. If the hostname resolves
+to a blocked address, the request is rejected with no network contact.
+
+**Redirect handling**
+
+- Maximum **5** redirects.
+- Each redirect target is re-validated (scheme, hostname blocklist, resolved IPs).
+- A redirect to a private or blocked host is rejected with `400`.
+- Exceeding the redirect cap returns `400 — Failed to fetch image from URL.`
+
+**Response validation**
+
+| Check | Constraint | Error |
+|---|---|---|
+| Content-Type | Must start with `image/` | `400 — URL did not return an image` |
+| Body size | Max **20 MB** (`MAX_IMAGE_BYTES = 20_000_000`) | `400 — Image exceeds maximum allowed size` |
+
+**Timeouts**
+
+| Phase | Limit |
+|---|---|
+| Connect | 10 s |
+| Read | 30 s (`URL_FETCH_TIMEOUT = 30.0`) |
+
+Network errors (timeouts, connection refused, DNS failures) return
+`400 — Failed to fetch image from URL.`
+
+**Error responses summary**
+
+| Status | `detail` | Trigger |
+|---|---|---|
+| `400` | `Invalid image URL.` | Malformed URL (e.g. missing host) |
+| `400` | `Failed to fetch image from URL.` | Unsupported scheme, blocked hostname/IP, DNS failure, connection error, timeout, too many redirects |
+| `400` | `URL did not return an image` | Response Content-Type is not `image/*` |
+| `400` | `Image exceeds maximum allowed size` | Response body exceeds 20 MB |
+| `400` | `The provided data is not a recognized image format.` | Downloaded bytes are not a valid image (PIL error) |
+| `400` | `Provide either 'file' or 'image_url', not both.` | Both `file` and `image_url` supplied |
+| `422` | `Missing required input: send 'file' or 'image_url'.` | Neither `file` nor `image_url` supplied |
+| `500` | `OCR processing failed.` | Unexpected OCR error (no internals leaked) |
+
+> **Security note:** All error messages are controlled strings. Raw IP
+> addresses, exception messages, and internal paths are never included in
+> HTTP responses.
+
+##### Example requests (URL)
+
+```bash
+# Valid URL
+curl -X POST "http://localhost:8000/v1/parse-receipt" \
+  -F "image_url=https://example.com/receipt.jpg"
+
+# Blocked: file:// scheme → 400
+curl -s -X POST "http://localhost:8000/v1/parse-receipt" \
+  -F "image_url=file:///etc/passwd" | python -m json.tool
+# {"detail":"Failed to fetch image from URL."}
+
+# Blocked: metadata IP → 400
+curl -s -X POST "http://localhost:8000/v1/parse-receipt" \
+  -F "image_url=http://169.254.169.254/latest/meta-data/" | python -m json.tool
+# {"detail":"Failed to fetch image from URL."}
+
+# Blocked: non-image response → 400
+curl -s -X POST "http://localhost:8000/v1/parse-receipt" \
+  -F "image_url=https://example.com/page.html" | python -m json.tool
+# {"detail":"URL did not return an image"}
+
+# Blocked: empty input → 422
+curl -s -X POST "http://localhost:8000/v1/parse-receipt" | python -m json.tool
+# {"detail":"Missing required input: send 'file' or 'image_url'."}
+```
+
 #### Response
 
 ```json

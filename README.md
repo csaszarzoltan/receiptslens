@@ -107,6 +107,60 @@ curl -X POST "http://localhost:8000/v1/parse-receipt/async" \
 
 ---
 
+## Using image_url
+
+ReceiptLens can fetch receipt images directly from a public URL instead of requiring a multipart file upload. This is useful for cloud-hosted images, webhooks, or when you want to avoid transferring large files in the request.
+
+### Single receipt
+
+Send `image_url` as a form field to `POST /v1/parse-receipt`:
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipt" \
+  -F "image_url=https://example.com/receipt.jpg"
+```
+
+### Batch receipts
+
+Send `image_urls` as a JSON-encoded array to `POST /v1/parse-receipts`:
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipts" \
+  -F "image_urls=[\"https://example.com/receipt1.jpg\",\"https://example.com/receipt2.jpg\"]"
+```
+
+### Async receipt
+
+Send `image_url` as a form field to `POST /v1/parse-receipt/async`:
+
+```bash
+curl -X POST "http://localhost:8000/v1/parse-receipt/async" \
+  -F "image_url=https://example.com/receipt.jpg"
+```
+
+### URL constraints
+
+| Constraint | Value |
+|---|---|
+| **Connect timeout** | 10 seconds |
+| **Read timeout** | 30 seconds |
+| **Redirects** | Automatically followed |
+| **Allowed protocols** | `http://` and `https://` (httpx default) |
+| **Maximum inputs** | 1 URL (single endpoint), 1-20 URLs (batch) |
+| **Mixed input** | Cannot combine `file` upload + `image_url` in the same request |
+
+### Error behavior
+
+- **Invalid or unreachable URL** — returns `400 Bad Request` with detail: `Failed to fetch image from URL: <error message>`.
+- **Both `file` and `image_url` provided** — returns `400 Bad Request`: `Provide either 'file' or 'image_url', not both.`
+- **Neither `file` nor `image_url` provided** — returns `422`: `Missing required input: send 'file' or 'image_url'.`
+- **Batch: invalid `image_urls` JSON** — returns `422` with JSON decode error details.
+- **Batch: more than 20 URLs** — returns `413 Payload Too Large`.
+
+In batch mode, individual URL failures are returned per-item in the `results` array (with an `error` field and null values for all other fields) without failing the entire request. The `summary` block counts `successful` and `failed` items.
+
+---
+
 ## Response Schema
 
 ```jsonc

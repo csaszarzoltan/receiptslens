@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import io
 import re
+from difflib import SequenceMatcher
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime
+from typing import Any, Optional
 
 import pytesseract
 from PIL import Image, ImageEnhance, ImageFilter
@@ -256,6 +257,186 @@ def _confidence_from_data(image_bytes: bytes) -> dict[str, float | None]:
         "currency": _field_conf(currency_val is not None),
         "line_items": _field_conf(len(items) > 0),
     }
+
+
+# ---------------------------------------------------------------------------
+# Duplicate detection (v0.4.0)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DuplicateGroup:
+    group_id: int
+    indices: list[int]
+    confidence: float
+    match_evidence: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DuplicateResult:
+    duplicate_groups: list[DuplicateGroup]
+    summary: dict[str, Any]
+
+
+def _vendor_similarity(a: str | None, b: str | None) -> float:
+    if a is None or b is None:
+        return 0.0
+    return SequenceMatcher(None, a or "", b or "").ratio()
+
+
+def _canonicalize_total(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 2)
+
+
+def _parse_date(date_str: str | None) -> date | None:
+    if not date_str:
+        return None
+    for fmt in (
+        "%Y-%m-%d",
+        "%d.%m.%Y",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d.%m.%y",
+        "%d/%m/%y",
+    ):
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _group_duplicates(receipts: list[dict]) -> DuplicateResult:
+    n = len(receipts)
+    if n == 0:
+        return DuplicateResult(
+            duplicate_groups=[],
+            summary={"total": 0, "duplicate_groups": 0, "unique": 0},
+        )
+
+    totals = [_canonicalize_total(r.get("total")) for r in receipts]
+    dates = [_parse_date(r.get("date")) for r in receipts]
+    vendors = [r.get("vendor") for r in receipts]
+    vendors_upper = [v.upper() if v else v for v in vendors]
+
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            t_a, t_b = totals[i], totals[j]
+            if t_a is None or t_b is None or t_a != t_b:
+                continue
+
+            vendor_sim = _vendor_similarity(vendors_upper[i], vendors_upper[j])
+            if vendor_sim < 0.70:
+                continue
+
+            d_a, d_b = dates[i], dates[j]
+            if d_a is not None and d_b is not None:
+                day_diff = abs((d_a - d_b).days)
+                if day_diff > 3:
+                    continue
+
+            union(i, j)
+
+    groups_map: dict[int, list[int]] = {}
+    for i in range(n):
+        root = find(i)
+        groups_map.setdefault(root, []).append(i)
+
+    group_id = 0
+    groups: list[DuplicateGroup] = []
+    for root, indices in groups_map.items():
+        if len(indices) < 2:
+            continue
+        group_id += 1
+
+        total_score_sum = 0.0
+        date_score_sum = 0.0
+        vendor_score_sum = 0.0
+        pair_count = 0
+
+        for ai, ia in enumerate(indices):
+            for ib in indices[ai + 1 :]:
+                t_a, t_b = totals[ia], totals[ib]
+                total_score = 1.0 if (t_a is not None and t_b is not None and t_a == t_b) else 0.0
+
+                d_a, d_b = dates[ia], dates[ib]
+                if d_a is None or d_b is None:
+                    date_score = 0.0
+                elif d_a == d_b:
+                    date_score = 1.0
+                elif abs((d_a - d_b).days) <= 3:
+                    date_score = 0.5
+                else:
+                    date_score = 0.0
+
+                vendor_sim = _vendor_similarity(vendors_upper[ia], vendors_upper[ib])
+
+                total_score_sum += total_score
+                date_score_sum += date_score
+                vendor_score_sum += vendor_sim
+                pair_count += 1
+
+        confidence = (
+            (total_score_sum + date_score_sum + vendor_score_sum) / (3 * pair_count)
+            if pair_count > 0
+            else 0.0
+        )
+
+        i0, j0 = indices[0], indices[1]
+        d_a, d_b = dates[i0], dates[j0]
+        if d_a is None or d_b is None:
+            date_match: bool | None = None
+        else:
+            date_match = d_a == d_b or abs((d_a - d_b).days) <= 3
+
+        match_evidence = {
+            "total_match": totals[i0] == totals[j0],
+            "vendor_similarity": _vendor_similarity(vendors_upper[i0], vendors_upper[j0]),
+            "date_match": date_match,
+        }
+
+        groups.append(
+            DuplicateGroup(
+                group_id=group_id,
+                indices=indices,
+                confidence=confidence,
+                match_evidence=match_evidence,
+            )
+        )
+
+    group_count = sum(1 for indices in groups_map.values() if len(indices) > 1)
+
+    return DuplicateResult(
+        duplicate_groups=groups,
+        summary={
+            "total": n,
+            "duplicate_groups": group_count,
+            "unique": n - group_count,
+        },
+    )
+
+
+def check_duplicates(receipts: list[dict], *, receipt_batch_size: int = 200) -> DuplicateResult:
+    if receipt_batch_size < 1:
+        raise ValueError("receipt_batch_size must be >= 1")
+    if len(receipts) > receipt_batch_size:
+        raise ValueError("too many receipts for the configured batch size")
+    return _group_duplicates(receipts)
 
 
 # ---------------------------------------------------------------------------
