@@ -1,0 +1,1 @@
+"""ReceiptLens application package."""

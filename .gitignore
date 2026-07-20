@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.eggs/
+*.egg-info/
+*.egg
+
+
+# FastAPI / Uvicorn
+*.db
+instance/
+
+
+# Tesseract / PaddleOCR artifacts
+ocr_models/
+*.traineddata
+
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+
+
+# Ruff
+.ruff_cache/
+
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+
+# OpenCode / local workflow
+.mimocode/
+!.mimocode/bin
