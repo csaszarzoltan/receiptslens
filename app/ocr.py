@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import io
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
@@ -25,6 +25,7 @@ except AttributeError:
 # Data model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ReceiptItem:
     name: str
@@ -42,11 +43,18 @@ class ParsedReceipt:
     raw_text: str
 
 
+@dataclass
+class ConfidenceReceipt(ParsedReceipt):
+    confidence: dict[str, float | None] = field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_CURRENCY_SYMBOLS = r"(?:[$€£¥₹₽]|USD|EUR|GBP|JPY|INR|RUB|CZK|HUF|RON|BGN|PLN|SEK|NOK|DKK)"
+_CURRENCY_SYMBOLS = (
+    r"(?:[$€£¥₹₽]|USD|EUR|GBP|JPY|INR|RUB|CZK|HUF|RON|BGN|PLN|SEK|NOK|DKK)"
+)
 _AMOUNT = r"(?:\d{1,3}(?:[.,]\d{3})*[.,]\d{2}|\d+[.,]\d{2}|\d+)"
 
 _TOTAL_RE = re.compile(
@@ -178,8 +186,82 @@ def _parse_line_items(text: str) -> list[ReceiptItem]:
 
 
 # ---------------------------------------------------------------------------
+# Confidence heuristics
+# ---------------------------------------------------------------------------
+
+
+def _confidence_from_data(image_bytes: bytes) -> dict[str, float | None]:
+    """Derive per-field confidence from Tesseract ``image_to_data`` output.
+
+    Returns dict with keys: vendor, total, date, tax, currency, line_items.
+    Missing keys default to ``None``.
+    """
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        image = image.convert("L")
+        image = image.resize(
+            (int(image.width * 1.5), int(image.height * 1.5)),
+            _RESAMPLING,
+        )
+        data = pytesseract.image_to_data(
+            image, config="--oem 3 --psm 6", output_type=pytesseract.Output.DICT
+        )
+    except Exception:
+        return {
+            "vendor": None,
+            "total": None,
+            "date": None,
+            "tax": None,
+            "currency": None,
+            "line_items": None,
+        }
+
+    if not data.get("text"):
+        return {
+            "vendor": None,
+            "total": None,
+            "date": None,
+            "tax": None,
+            "currency": None,
+            "line_items": None,
+        }
+
+    confs = [c for c in data.get("conf", []) if c != "-1"]
+    avg_conf = sum(confs) / len(confs) / 100.0 if confs else 0.0
+    min_conf = min(confs) / 100.0 if confs else 0.0
+    weighted = (avg_conf + min_conf) / 2.0
+
+    clean_text = _clean_text(pytesseract.image_to_string(
+        image, config="--oem 3 --psm 6"
+    ))
+
+    # Per-field confidence: check if the field value was actually found.
+    total_val = _find_first(_TOTAL_RE, clean_text)
+    tax_val = _find_first(_TAX_RE, clean_text)
+    date_val = _find_first(_DATE_RE, clean_text)
+    currency_val = _extract_currency(clean_text)
+    merchant_val = _extract_merchant(clean_text)
+    items = _parse_line_items(clean_text)
+
+    def _field_conf(found: bool) -> float:
+        if not found:
+            return 0.0
+        return weighted
+
+    return {
+        "vendor": _field_conf(merchant_val is not None),
+        "total": _field_conf(total_val is not None),
+        "date": _field_conf(date_val is not None),
+        "tax": _field_conf(tax_val is not None),
+        "currency": _field_conf(currency_val is not None),
+        "line_items": _field_conf(len(items) > 0),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public surface
 # ---------------------------------------------------------------------------
+
 
 def extract_text(image_bytes: bytes) -> str:
     """Run OCR on image bytes and return the raw recognized text."""
@@ -232,6 +314,22 @@ def parse_receipt(image_bytes: bytes) -> ParsedReceipt:
         tax=tax,
         currency=currency,
         raw_text=text,
+    )
+
+
+def parse_receipt_with_confidence(image_bytes: bytes) -> ConfidenceReceipt:
+    """Extract structured receipt data and per-field confidence scores."""
+    parsed = parse_receipt(image_bytes)
+    confidence = _confidence_from_data(image_bytes)
+    return ConfidenceReceipt(
+        merchant=parsed.merchant,
+        date=parsed.date,
+        items=parsed.items,
+        total=parsed.total,
+        tax=parsed.tax,
+        currency=parsed.currency,
+        raw_text=parsed.raw_text,
+        confidence=confidence,
     )
 
 
