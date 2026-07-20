@@ -4,6 +4,7 @@ Produces structured receipt data from raw image bytes via Tesseract.
 """
 from __future__ import annotations
 
+import io
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -67,7 +68,7 @@ _DATE_RE = re.compile(
 )
 _CURRENCY_RE = re.compile(_CURRENCY_SYMBOLS)
 _LINE_ITEM_RE = re.compile(
-    rf"^(.+?)\s+{_AMOUNT}\s*$"
+    rf"^(.+?)\s+({_AMOUNT})\s*$"
 )
 
 # Headers that indicate a store name are typically at the top of the text.
@@ -242,7 +243,3 @@ def _normalize_date(raw: str) -> str | None:
         except ValueError:
             continue
     return raw
-
-
-# Lazy import to avoid module-level dependency on optional stdlib in constrained envs.
-import io  # noqa: E402  (kept at bottom so the public defs are seen above)

@@ -78,3 +78,31 @@ def test_parse_receipt_returns_parsed_for_valid_image():
 def test_parse_receipt_rejects_empty_bytes():
     with pytest.raises(ValueError, match="image_bytes must not be empty"):
         ocr.parse_receipt(b"")
+
+
+# --------------------------------------------------------------------------
+# Regression tests -- guard against the IndexError in _parse_line_items
+# (m.group(2) crashed when _LINE_ITEM_RE had no capturing group for price).
+# --------------------------------------------------------------------------
+def test_parse_line_items_uses_price_group():
+    """A line `NAME <amount>` must yield a ReceiptItem with the parsed price.
+
+    This is the exact shape that previously raised ``IndexError: no such group``
+    because the price group was non-capturing.
+    """
+    text = "Milk        1.20\nBread       2.50\nTOTAL       7.48"
+    items = ocr._parse_line_items(text)
+    # TOTAL is filtered out by the keyword guard; the two goods remain.
+    names = {item.name for item in items}
+    assert "Milk" in names and "Bread" in names
+    milk = next(i for i in items if i.name == "Milk")
+    assert milk.price == 1.2
+
+
+def test_parse_line_items_handles_decimal_separators():
+    # European-style thousands/decimal separation must not break parsing.
+    text = "Wine        1.234,56\nWater       0,99"
+    items = ocr._parse_line_items(text)
+    prices = {item.name: item.price for item in items}
+    assert prices.get("Wine") == 1234.56
+    assert prices.get("Water") == 0.99
