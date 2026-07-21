@@ -15,6 +15,10 @@ Send an image (file upload, public URL, or batch of either) to `POST /v1/parse-r
 - **Receipt OCR** — runs Tesseract 5 on uploaded images with automatic pre-processing (grayscale, upscale, contrast, sharpen).
 - **Structured output** — parses merchant, date, line items, subtotal, tax, and total from raw OCR text with regex heuristics.
 - **Confidence scores** — every field includes a `confidence` float between 0.0 and 1.0, derived from Tesseract `image_to_data` accuracy metrics.
+- **OCR pipeline library** — use `app.ocr` and `app.preprocessing` as a Python library, no server required. See [Library Usage](#library-usage).
+- **Image preprocessing** — automatic EXIF orientation correction, deskew via projection profiles, adaptive thresholding, and contrast/sharpen enhancements. All stages configurable.
+- **Magic byte validation** — rejects non-image files before PIL decode (JPEG, PNG, TIFF, BMP, WEBP, GIF).
+- **Typed exceptions** — `InvalidImageError`, `UnsupportedImageFormatError`, and `CorruptImageError` map to HTTP 400/415/422.
 - **Async processing** — queue long-running OCR jobs with `POST /v1/parse-receipt/async`, poll with `GET /v1/jobs/{job_id}`, and receive a webhook callback on completion.
 - **Batch processing** — parse multiple receipts in one call with `POST /v1/parse-receipts` for file uploads or `image_urls`, plus async batch jobs via `POST /v1/parse-receipts/async`.
 - **Flexible input** — accepts a multipart `file` upload or an `image_url` form field, in single or batch mode.
@@ -33,11 +37,19 @@ Send an image (file upload, public URL, or batch of either) to `POST /v1/parse-r
 ### Installation
 
 ```bash
-cp .env.example .env   # if present
+# System dependency (Tesseract binary)
+# Debian/Ubuntu:
+sudo apt install tesseract-ocr tesseract-ocr-eng
+
+# macOS:
+brew install tesseract
+
+# Python dependencies
 pip install -e .
+# Installs: pillow, pytesseract, fastapi, uvicorn, pydantic, httpx, python-multipart
 ```
 
-### Running
+### Running the server
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -47,7 +59,94 @@ Visit `http://localhost:8000/docs` for the interactive OpenAPI playground.
 
 ---
 
-## Endpoints
+## Library Usage
+
+ReceiptLens works as a Python library without starting the server. All functions accept raw image bytes.
+
+### Basic OCR
+
+```python
+from app.ocr import extract_text
+
+with open("receipt.jpg", "rb") as f:
+    text = extract_text(f.read())
+print(text)
+```
+
+### Structured parsing
+
+```python
+from app.ocr import parse_receipt
+
+with open("receipt.jpg", "rb") as f:
+    receipt = parse_receipt(f.read())
+
+print("vendor :", receipt.merchant)
+print("date   :", receipt.date)
+print("total  :", receipt.total)
+print("tax    :", receipt.tax)
+print("items  :", [(i.name, i.price) for i in receipt.items])
+```
+
+### With confidence scores
+
+```python
+from app.ocr import parse_receipt_with_confidence
+
+with open("receipt.jpg", "rb") as f:
+    result = parse_receipt_with_confidence(f.read())
+
+for field, score in result.confidence.items():
+    print(f"{field}: {score:.2f}")
+```
+
+### Preprocessing only
+
+```python
+from app.preprocessing import preprocess_image
+
+with open("receipt.jpg", "rb") as f:
+    image = preprocess_image(f.read(), deskew=True)
+# Returns a PIL.Image.Image ready for custom processing
+```
+
+### Error handling
+
+```python
+from app.ocr import extract_text
+from app.exceptions import InvalidImageError
+
+try:
+    result = extract_text(b"not an image")
+except InvalidImageError as e:
+    print(f"Bad input: {e}")
+except ValueError as e:
+    print(f"Decode error: {e}")
+```
+
+### Preprocessing options
+
+| Option | Default | Description |
+|---|---|---|
+| `deskew` | `True` | Detect and correct skew via projection profiles (±5° range, 0.5° steps) |
+
+The preprocessing pipeline runs these stages in order:
+
+1. EXIF orientation correction
+2. Grayscale conversion
+3. Deskew (optional)
+4. Upscale 1.5x (LANCZOS)
+5. Adaptive thresholding (block size 15, C=10; global fallback for images >2M pixels)
+6. Contrast enhancement (2.0x)
+7. Sharpen
+
+### Supported image formats
+
+JPEG, PNG, TIFF (II/MM), BMP, WEBP, GIF — validated by magic bytes before PIL decode.
+
+---
+
+## API Endpoints
 
 ### Sync parsing
 
@@ -192,6 +291,13 @@ Batch responses wrap individual results in a top-level `results` array with a `s
 pytest
 ruff check .
 ```
+
+---
+
+## Documentation
+
+- [API Reference](docs/api.md) — endpoints, URL fetching contract, SSRF protection, error responses
+- [OCR Pipeline](docs/ocr-pipeline.md) — architecture, preprocessing stages, configuration, error handling, tips
 
 ---
 

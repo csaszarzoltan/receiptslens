@@ -4,7 +4,6 @@ Produces structured receipt data from raw image bytes via Tesseract.
 """
 from __future__ import annotations
 
-import io
 import re
 from difflib import SequenceMatcher
 from dataclasses import dataclass, field
@@ -12,15 +11,9 @@ from datetime import date, datetime
 from typing import Any, Optional
 
 import pytesseract
-from PIL import Image, ImageEnhance, ImageFilter
 
-# Pillow >=9.1 exposes resampling filters under ``Image.Resampling``; provide a
-# compatibility alias so the rest of the module can use ``RESAMPLING`` without
-# version checks.
-try:
-    _RESAMPLING = Image.Resampling.LANCZOS  # type: ignore[attr-defined]
-except AttributeError:
-    _RESAMPLING = Image.LANCZOS  # type: ignore[attr-defined]
+from app.preprocessing import preprocess_image
+from app.exceptions import InvalidImageError
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -198,12 +191,7 @@ def _confidence_from_data(image_bytes: bytes) -> dict[str, float | None]:
     Missing keys default to ``None``.
     """
     try:
-        image = Image.open(io.BytesIO(image_bytes))
-        image = image.convert("L")
-        image = image.resize(
-            (int(image.width * 1.5), int(image.height * 1.5)),
-            _RESAMPLING,
-        )
+        image = preprocess_image(image_bytes)
         data = pytesseract.image_to_data(
             image, config="--oem 3 --psm 6", output_type=pytesseract.Output.DICT
         )
@@ -447,16 +435,11 @@ def check_duplicates(receipts: list[dict], *, receipt_batch_size: int = 200) -> 
 def extract_text(image_bytes: bytes) -> str:
     """Run OCR on image bytes and return the raw recognized text."""
     if not image_bytes:
-        raise ValueError("image_bytes must not be empty")
-    image = Image.open(io.BytesIO(image_bytes))
-    image = image.convert("L")
-    image = image.resize(
-        (int(image.width * 1.5), int(image.height * 1.5)),
-        _RESAMPLING,
-    )
-    enhancer = ImageEnhance.Contrast(image)
-    image = enhancer.enhance(2.0)
-    image = image.filter(ImageFilter.SHARPEN)
+        raise InvalidImageError("image_bytes must not be empty")
+    try:
+        image = preprocess_image(image_bytes)
+    except ValueError as exc:
+        raise InvalidImageError(str(exc)) from exc
     return pytesseract.image_to_string(image, config="--oem 3 --psm 6")
 
 
