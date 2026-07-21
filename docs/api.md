@@ -225,6 +225,10 @@ curl -X POST "http://localhost:8000/v1/parse-receipts" \
   -F 'image_urls=["https://example.com/receipt1.jpg","https://example.com/receipt2.jpg"]'
 ```
 
+> The same URL fetching contract (scheme restrictions, SSRF protection,
+> redirect limits, content-type and size checks) described above for
+> `/v1/parse-receipt` applies to every URL in the array.
+
 #### Response
 
 ```json
@@ -289,6 +293,9 @@ curl -X POST "http://localhost:8000/v1/parse-receipts/async" \
 ```
 
 Returns `job_id` immediately. Poll with `GET /v1/jobs/{job_id}`.
+
+> The same URL fetching contract described above for `/v1/parse-receipt`
+> applies to each URL. Fetching happens in the background job (non-blocking).
 
 ## Verified quickstart
 

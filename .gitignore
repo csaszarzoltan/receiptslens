@@ -45,3 +45,5 @@ Thumbs.db
 # OpenCode / local workflow
 .mimocode/
 !.mimocode/bin
+.hermes/
+analysis/

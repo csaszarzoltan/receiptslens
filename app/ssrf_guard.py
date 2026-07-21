@@ -112,6 +112,8 @@ def validate_image_url(url: str) -> None:
     validate_scheme(parsed)
     if not parsed.hostname:
         raise ValueError("url host missing")
+    if _is_blocked_host(parsed.hostname):
+        raise ValueError(f"blocked hostname: {parsed.hostname}")
     validate_resolved_ips(parsed.hostname)
 
 
