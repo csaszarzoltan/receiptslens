@@ -20,7 +20,7 @@ logger = logging.getLogger("uvicorn.error")
 app = FastAPI(
     title="ReceiptLens",
     description="Extract structured data from receipt images.",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-22
+
+### Deployment
+
+- Deployed to Railway: https://receiptslens-production.up.railway.app
+- Added Dockerfile with Tesseract OCR system dependencies (tesseract-ocr, tesseract-ocr-eng)
+- Configured railway.toml with Docker builder, health check, and restart policy
+- Health endpoint (`GET /health`) responds at `/health`
+- OCR pipeline verified end-to-end on live Railway instance
+
 ## [0.4.0] - 2026-07-20
 
 ### Features
