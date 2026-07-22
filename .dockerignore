@@ -1,3 +1,7 @@
+# =============================================================================
+# ReceiptLens — .dockerignore
+# =============================================================================
+
 # Version control
 .git/
 .gitignore
@@ -17,9 +21,11 @@ venv/
 .coverage.*
 htmlcov/
 coverage.xml
+tests/
 
-# Linting
+# Linting & type checking
 .ruff_cache/
+.mypy_cache/
 
 # IDE / OS
 .DS_Store
@@ -30,8 +36,33 @@ Thumbs.db
 # Local workflow
 .mimocode/
 .hermes/
-analysis/
+
+# Documentation (not needed at runtime)
 docs/
 specs/
 examples/
-tests/
+analysis/
+CHANGELOG.md
+README.md
+
+# CI / CD
+.github/
+.gitlab-ci.yml
+*.yml
+*.yaml
+
+# Docker (don't include Dockerfiles in context)
+infra/
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Node (if any frontend tooling is added later)
+node_modules/
+package.json
+package-lock.json
+
+# Railway / deployment configs (not needed inside the image)
+railway.toml
+railway.json
+fly.toml
