@@ -159,23 +159,33 @@ def _adaptive_threshold(image: Image.Image) -> Image.Image:
     c = 10
     half = block_size // 2
 
-    result = [0] * (width * height)
+    # Build integral image (summed area table) for O(1) local mean queries
+    integral = [0] * (width * height)
+    for y in range(height):
+        row_sum = 0
+        for x in range(width):
+            row_sum += pixels[y * width + x]
+            above = integral[(y - 1) * width + x] if y > 0 else 0
+            integral[y * width + x] = above + row_sum
 
+    result = [0] * (width * height)
     for y in range(height):
         for x in range(width):
-            # Compute local mean
-            x_start = max(0, x - half)
-            x_end = min(width, x + half + 1)
             y_start = max(0, y - half)
-            y_end = min(height, y + half + 1)
+            y_end = min(height - 1, y + half)
+            x_start = max(0, x - half)
+            x_end = min(width - 1, x + half)
 
-            total = 0
-            count = 0
-            for ly in range(y_start, y_end):
-                for lx in range(x_start, x_end):
-                    total += pixels[ly * width + lx]
-                    count += 1
+            # Sum using integral image corners
+            total = integral[y_end * width + x_end]
+            if x_start > 0:
+                total -= integral[y_end * width + (x_start - 1)]
+            if y_start > 0:
+                total -= integral[(y_start - 1) * width + x_end]
+            if x_start > 0 and y_start > 0:
+                total += integral[(y_start - 1) * width + (x_start - 1)]
 
+            count = (y_end - y_start + 1) * (x_end - x_start + 1)
             mean = total / count if count > 0 else 128
             idx = y * width + x
             result[idx] = 0 if pixels[idx] < (mean - c) else 255
