@@ -59,6 +59,71 @@ Visit `http://localhost:8000/docs` for the interactive OpenAPI playground.
 
 ---
 
+## Deployment
+
+ReceiptLens is deployed on Railway at:
+
+**https://receiptslens-production.up.railway.app**
+
+### Deploy to Railway
+
+Deploy your own instance to Railway in one click:
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new?template=https://github.com/csaszarzoltan/receiptslens)
+
+Or via the Railway CLI:
+
+```bash
+npm i -g @railway/cli
+railway login
+railway link
+railway up
+railway domain
+```
+
+### Self-host with Docker
+
+```bash
+docker build -t receiptslens -f infra/Dockerfile .
+docker run -p 8000:8000 receiptslens
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PORT` | No | `8000` | Server port. Railway sets this automatically; set for local runs. |
+
+### Usage against the live API
+
+All localhost examples in this document work identically against the live URL. Replace `http://localhost:8000` with the Railway URL:
+
+```bash
+curl -X POST "https://receiptslens-production.up.railway.app/v1/parse-receipt" \
+  -F "file=@receipt.jpg"
+```
+
+```python
+import requests
+
+resp = requests.post(
+    "https://receiptslens-production.up.railway.app/v1/parse-receipt",
+    files={"file": open("receipt.jpg", "rb")},
+)
+print(resp.json())
+```
+
+Check service health:
+
+```bash
+curl https://receiptslens-production.up.railway.app/health
+# {"status":"ok"}
+```
+
+Browse the interactive API docs at **https://receiptslens-production.up.railway.app/docs**.
+
+---
+
 ## Library Usage
 
 ReceiptLens works as a Python library without starting the server. All functions accept raw image bytes.
